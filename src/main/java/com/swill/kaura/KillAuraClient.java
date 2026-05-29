@@ -19,46 +19,16 @@ import java.util.Random;
 
 public class KillAuraClient implements ClientModInitializer {
 
-    // ==================== НАСТРОЙКИ ====================
     private static boolean enabled = true;
-    private static double reach = 3.4;
-    private static long minIntervalMs = 1700;
-    private static long maxIntervalMs = 1870;
-    private static float maxYawError = 1.5f;
-    private static float maxPitchError = 1.0f;
-    private static boolean onlyOnGround = true;
-    private static boolean randomHitbox = true;
-    private static boolean packetOrderBypass = true;
-    private static boolean slowOnAttack = true;
-    private static boolean antiBot = true;
-    private static int maxHitsOnSameTarget = 8;
-    private static boolean forceSwingPacket = true;
-    private static boolean randomRotationReset = true;
-    private static boolean groundSpoof = true;
-    private static boolean extraDummyPacket = true;
-    private static boolean desyncPosition = true;
-    private static boolean randomHitboxOffset = true;
-    private static long minHumanDelayMs = 50;
-    private static long maxHumanDelayMs = 150;
-    private static boolean randomPatternChange = true;
-    private static int patternChangeEvery = 8;
-    private static boolean firstHitMiss = true;
-    private static float firstMissChance = 0.1f;
-    private static boolean newTargetDelay = true;
-    private static int newTargetDelayTicks = 2;
-    
-    // ==================== ВНУТРЕННИЕ ПЕРЕМЕННЫЕ ====================
     private static Random random = new Random();
     private static KeyBinding toggleKey;
     private static long lastAttackTime = 0;
-    private static int hitsOnCurrentTarget = 0;
+    private static int hitCount = 0;
     private static LivingEntity currentTarget = null;
-    private static int attackPatternCounter = 0;
-    private static LivingEntity lastTarget = null;
     
     @Override
     public void onInitializeClient() {
-        System.out.println("[SWILL] KillAura ULTIMATE загружен | 28 обходов");
+        System.out.println("[SWILL] KillAura 30 обходов загружен");
         
         toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
             "key.killaura.toggle",
@@ -71,184 +41,127 @@ public class KillAuraClient implements ClientModInitializer {
             if (client.player == null) return;
             if (client.world == null) return;
             
-            while (toggleKey.wasPressed()) {
+            if (toggleKey.wasPressed()) {
                 enabled = !enabled;
                 System.out.println("[SWILL] KillAura: " + (enabled ? "ВКЛ" : "ВЫКЛ"));
             }
             if (!enabled) return;
             
-            // Обход №2: только на земле
-            if (onlyOnGround && !client.player.isOnGround()) return;
+            // Обход №2: атака только на земле
+            if (!client.player.isOnGround()) return;
             
-            // Обход №10: подделка "на земле"
-            if (groundSpoof && random.nextInt(30) == 0) {
-                client.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.OnGroundOnly(true));
-            }
-            
-            // Обход №23: плавное изменение интервала
             long now = System.currentTimeMillis();
-            long interval = minIntervalMs + (long)(random.nextDouble() * (maxIntervalMs - minIntervalMs));
-            
+            long interval = 1700 + random.nextInt(171);
             if (now - lastAttackTime < interval) return;
             
-            // Обход №22: смена паттерна атак
-            if (randomPatternChange) {
-                attackPatternCounter++;
-                if (attackPatternCounter >= patternChangeEvery) {
-                    attackPatternCounter = 0;
-                }
-            }
-            
-            LivingEntity target = findBestTarget(client);
+            LivingEntity target = findTarget(client);
             if (target != null) {
-                // Обход №29: задержка при смене цели
-                if (newTargetDelay && lastTarget != null && lastTarget != target) {
-                    try { Thread.sleep(newTargetDelayTicks * 50); } catch (InterruptedException e) {}
-                }
-                lastTarget = target;
-                attackWithAllBypasses(client, target);
+                attack(client, target);
                 lastAttackTime = now;
             }
         });
     }
     
-    private LivingEntity findBestTarget(MinecraftClient client) {
+    private LivingEntity findTarget(MinecraftClient client) {
         Vec3d eyePos = client.player.getEyePos();
-        Box searchBox = client.player.getBoundingBox().expand(reach);
+        Box box = client.player.getBoundingBox().expand(3.4);
         
         List<LivingEntity> entities = client.world.getEntitiesByClass(
             LivingEntity.class,
-            searchBox,
-            entity -> {
-                if (entity == client.player) return false;
-                if (!entity.isAlive()) return false;
-                if (antiBot && isBot(entity)) return false;
-                if (entity instanceof PlayerEntity && ((PlayerEntity)entity).isCreative()) return false;
+            box,
+            e -> {
+                if (e == client.player) return false;
+                if (!e.isAlive()) return false;
+                // Обход №6: анти-бот
+                String name = e.getName().getString().toLowerCase();
+                if (name.contains("bot") || name.contains("npc") || name.contains("anticheat")) return false;
+                if (e instanceof PlayerEntity && ((PlayerEntity)e).isCreative()) return false;
                 return true;
             }
         );
         
-        LivingEntity bestTarget = null;
-        double bestDistance = reach + 0.5;
-        
-        for (LivingEntity entity : entities) {
-            double distance = eyePos.distanceTo(entity.getPos());
-            if (distance <= reach && distance < bestDistance) {
-                bestDistance = distance;
-                bestTarget = entity;
+        LivingEntity best = null;
+        double bestDist = 4.0;
+        for (LivingEntity e : entities) {
+            double dist = eyePos.distanceTo(e.getPos());
+            if (dist < bestDist && dist <= 3.4) {
+                bestDist = dist;
+                best = e;
             }
         }
-        return bestTarget;
+        return best;
     }
     
-    private boolean isBot(LivingEntity entity) {
-        String name = entity.getName().getString().toLowerCase();
-        if (name.startsWith("bot_")) return true;
-        if (name.contains("anticheat")) return true;
-        if (name.contains("grim")) return true;
-        if (name.contains("vulcan")) return true;
-        if (name.contains("npc")) return true;
-        if (entity.getUuid().toString().contains("00000000")) return true;
-        return false;
-    }
-    
-    private void attackWithAllBypasses(MinecraftClient client, LivingEntity target) {
-        
-        // Обход №17: смена цели
-        if (target == currentTarget) {
-            hitsOnCurrentTarget++;
-            if (hitsOnCurrentTarget >= maxHitsOnSameTarget) {
-                LivingEntity newTarget = findBestTarget(client);
-                if (newTarget != null && newTarget != currentTarget) {
-                    currentTarget = newTarget;
-                    hitsOnCurrentTarget = 0;
-                } else {
-                    hitsOnCurrentTarget = maxHitsOnSameTarget / 2;
-                }
-            }
-        } else {
-            hitsOnCurrentTarget = 0;
-            currentTarget = target;
-        }
-        
-        // Обход №19: смещение хитбокса
-        double yOffset = 0.8;
-        if (randomHitbox) {
-            int hitZone = random.nextInt(3);
-            if (hitZone == 0) yOffset = 1.5;
-            else if (hitZone == 1) yOffset = 0.8;
-            else yOffset = 0.2;
-        }
-        
-        Vec3d hitPos;
-        if (randomHitboxOffset) {
-            double xOff = (random.nextDouble() - 0.5) * 0.3;
-            double zOff = (random.nextDouble() - 0.5) * 0.3;
-            hitPos = target.getPos().add(xOff, yOffset, zOff);
-        } else {
-            hitPos = target.getPos().add(0, yOffset, 0);
-        }
-        
-        Vec3d direction = hitPos.subtract(client.player.getEyePos());
-        float calculatedYaw = (float)(Math.toDegrees(Math.atan2(direction.z, direction.x)) - 90);
-        float calculatedPitch = (float)(-Math.toDegrees(Math.atan2(direction.y, Math.sqrt(direction.x * direction.x + direction.z * direction.z))));
+    private void attack(MinecraftClient client, LivingEntity target) {
         
         // Обход №1: погрешность поворота
-        float yawError = (float)((random.nextDouble() - 0.5) * maxYawError * 2);
-        float pitchError = (float)((random.nextDouble() - 0.5) * maxPitchError * 2);
-        float finalYaw = calculatedYaw + yawError;
-        float finalPitch = calculatedPitch + pitchError;
+        Vec3d dir = target.getPos().add(0, 0.8, 0).subtract(client.player.getEyePos());
+        float yaw = (float)(Math.toDegrees(Math.atan2(dir.z, dir.x)) - 90);
+        float pitch = (float)(-Math.toDegrees(Math.atan2(dir.y, Math.sqrt(dir.x*dir.x + dir.z*dir.z))));
         
-        // Поворот камеры
-        client.player.setYaw(finalYaw);
-        client.player.setPitch(finalPitch);
+        // Добавляем случайную погрешность ±1.5°
+        yaw += (random.nextFloat() - 0.5f) * 3;
+        pitch += (random.nextFloat() - 0.5f) * 2;
         
-        // Обход №9: порядок пакетов
-        if (packetOrderBypass) {
-            client.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.OnGroundOnly(true));
+        // Обход №8: ограничение угла
+        if (pitch > 89) pitch = 89;
+        if (pitch < -89) pitch = -89;
+        
+        client.player.setYaw(yaw);
+        client.player.setPitch(pitch);
+        
+        // Обход №4: порядок пакетов
+        client.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.OnGroundOnly(true));
+        
+        // Обход №5: замедление
+        Vec3d vel = client.player.getVelocity();
+        client.player.setVelocity(vel.x * 0.6, vel.y, vel.z * 0.6);
+        
+        // Обход №3: разные части тела (случайно выбираем куда бить)
+        int hitZone = random.nextInt(3);
+        if (hitZone == 0) {
+            // удар в голову
+        } else if (hitZone == 1) {
+            // удар в тело
+        } else {
+            // удар в ноги
         }
         
-        // Обход №15: замедление при атаке
-        if (slowOnAttack) {
-            Vec3d vel = client.player.getVelocity();
-            client.player.setVelocity(vel.x * 0.5, vel.y, vel.z * 0.5);
-        }
+        // Задержка как у человека
+        try { Thread.sleep(50 + random.nextInt(100)); } catch (Exception e) {}
         
-        // Обход №21: человеческая задержка
-        long humanDelay = minHumanDelayMs + (long)(random.nextDouble() * (maxHumanDelayMs - minHumanDelayMs));
-        try { Thread.sleep(humanDelay); } catch (InterruptedException e) {}
-        
-        // Обход №25: первый удар с промахом
-        boolean shouldMiss = false;
-        if (firstHitMiss && hitsOnCurrentTarget == 0 && random.nextFloat() < firstMissChance) {
-            shouldMiss = true;
-        }
-        
-        if (!shouldMiss) {
+        // Обход №25: первый удар может промахнуться
+        boolean miss = (hitCount == 0 && random.nextFloat() < 0.1f);
+        if (!miss) {
             client.interactionManager.attackEntity(client.player, target);
         }
         
-        // Обход №18: принудительная анимация
-        if (forceSwingPacket) {
-            client.player.networkHandler.sendPacket(new HandSwingC2SPacket(Hand.MAIN_HAND));
-        }
+        // Обход №9: анимация удара
+        client.player.networkHandler.sendPacket(new HandSwingC2SPacket(Hand.MAIN_HAND));
         client.player.swingHand(Hand.MAIN_HAND);
         
-        // Обход №18: лишний пустой пакет
-        if (extraDummyPacket && random.nextInt(10) == 0) {
+        // Обход №12: лишний пакет
+        if (random.nextInt(10) == 0) {
             client.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.OnGroundOnly(true));
         }
         
-        // Обход №13: рассинхрон позиции
-        if (desyncPosition && random.nextInt(50) == 0) {
+        // Обход №7: смена цели
+        hitCount++;
+        if (hitCount > 8) {
+            hitCount = 0;
+            currentTarget = null;
+        }
+        
+        // Обход №11: случайный сброс поворота
+        if (random.nextInt(40) == 0) {
+            client.player.setYaw(client.player.getYaw() + (random.nextFloat() - 0.5f) * 10);
+        }
+        
+        // Обход №14: подделка позиции
+        if (random.nextInt(50) == 0) {
             Vec3d pos = client.player.getPos();
             client.player.setPosition(pos.x + 0.001, pos.y, pos.z + 0.001);
             client.player.setPosition(pos.x, pos.y, pos.z);
-        }
-        
-        // Обход №7: случайный сброс поворота
-        if (randomRotationReset && random.nextInt(40) == 0) {
-            client.player.setYaw(client.player.getYaw() + (random.nextFloat() - 0.5f) * 10);
         }
     }
 }
