@@ -15,8 +15,10 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
+      - name: Make gradlew executable
+        run: chmod +x gradlew
       - name: Build with Gradle
-        run: chmod +x gradlew && ./gradlew build
+        run: ./gradlew build
       - name: Upload JAR
         uses: actions/upload-artifact@v4
         with:
