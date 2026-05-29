@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "killaura-client",
   "version": "1.0.0",
-  "name": "KillAura Ultimate",
-  "description": "Full bypass for all anticheats - 30 bypasses",
+  "name": "KillAura Client",
+  "description": "KillAura with bypasses",
   "authors": ["SWILL"],
   "license": "MIT",
   "environment": "client",
@@ -11,8 +11,8 @@
     "client": ["com.swill.kaura.KillAuraClient"]
   },
   "depends": {
-    "fabricloader": ">=0.15.0",
-    "minecraft": "1.21.11",
+    "fabricloader": ">=0.16.2",
+    "minecraft": ">=1.21.4",
     "java": ">=21",
     "fabric-api": "*"
   }
