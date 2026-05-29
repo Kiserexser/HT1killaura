@@ -24,7 +24,12 @@ public class KillAuraClient implements ClientModInitializer {
     private static KeyBinding toggleKey;
     private static long lastAttackTime = 0;
     private static int hitCount = 0;
+    private static int rotationCount = 0;
+    private static long lastRotationReset = 0;
     private static LivingEntity currentTarget = null;
+    private static long lastPacketTime = 0;
+    private static float lastYaw = 0;
+    private static float lastPitch = 0;
     
     @Override
     public void onInitializeClient() {
@@ -47,11 +52,13 @@ public class KillAuraClient implements ClientModInitializer {
             }
             if (!enabled) return;
             
-            // Обход №2: атака только на земле
+            // ===== ОБХОД №2: атака только на земле (AAC, Spartan) =====
             if (!client.player.isOnGround()) return;
             
+            // ===== ОБХОД №23: плавное изменение CPS (Verus, Themis) =====
             long now = System.currentTimeMillis();
-            long interval = 1700 + random.nextInt(171);
+            double cpsVariation = 0.5 + Math.sin(now / 10000.0) * 0.3;
+            long interval = (long)(1700 * cpsVariation) + random.nextInt(200);
             if (now - lastAttackTime < interval) return;
             
             LivingEntity target = findTarget(client);
@@ -64,6 +71,12 @@ public class KillAuraClient implements ClientModInitializer {
     
     private LivingEntity findTarget(MinecraftClient client) {
         Vec3d eyePos = client.player.getEyePos();
+        
+        // ===== ОБХОД №27: подмена высоты глаз (Grim, Spartan) =====
+        if (random.nextInt(20) == 0) {
+            eyePos = eyePos.add(0, 0.2, 0);
+        }
+        
         Box box = client.player.getBoundingBox().expand(3.4);
         
         List<LivingEntity> entities = client.world.getEntitiesByClass(
@@ -72,9 +85,11 @@ public class KillAuraClient implements ClientModInitializer {
             e -> {
                 if (e == client.player) return false;
                 if (!e.isAlive()) return false;
-                // Обход №6: анти-бот
+                
+                // ===== ОБХОД №6: анти-бот (Grim, Vulcan, Spartan) =====
                 String name = e.getName().getString().toLowerCase();
                 if (name.contains("bot") || name.contains("npc") || name.contains("anticheat")) return false;
+                if (name.contains("grim") || name.contains("vulcan") || name.contains("polar")) return false;
                 if (e instanceof PlayerEntity && ((PlayerEntity)e).isCreative()) return false;
                 return true;
             }
@@ -94,74 +109,146 @@ public class KillAuraClient implements ClientModInitializer {
     
     private void attack(MinecraftClient client, LivingEntity target) {
         
-        // Обход №1: погрешность поворота
-        Vec3d dir = target.getPos().add(0, 0.8, 0).subtract(client.player.getEyePos());
-        float yaw = (float)(Math.toDegrees(Math.atan2(dir.z, dir.x)) - 90);
-        float pitch = (float)(-Math.toDegrees(Math.atan2(dir.y, Math.sqrt(dir.x*dir.x + dir.z*dir.z))));
-        
-        // Добавляем случайную погрешность ±1.5°
-        yaw += (random.nextFloat() - 0.5f) * 3;
-        pitch += (random.nextFloat() - 0.5f) * 2;
-        
-        // Обход №8: ограничение угла
-        if (pitch > 89) pitch = 89;
-        if (pitch < -89) pitch = -89;
-        
-        client.player.setYaw(yaw);
-        client.player.setPitch(pitch);
-        
-        // Обход №4: порядок пакетов
-        client.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.OnGroundOnly(true));
-        
-        // Обход №5: замедление
-        Vec3d vel = client.player.getVelocity();
-        client.player.setVelocity(vel.x * 0.6, vel.y, vel.z * 0.6);
-        
-        // Обход №3: разные части тела (случайно выбираем куда бить)
-        int hitZone = random.nextInt(3);
-        if (hitZone == 0) {
-            // удар в голову
-        } else if (hitZone == 1) {
-            // удар в тело
-        } else {
-            // удар в ноги
+        // ===== ОБХОД №7: смена цели после 8 ударов (Grim, Vulcan) =====
+        if (target != currentTarget) {
+            hitCount = 0;
+            currentTarget = target;
         }
-        
-        // Задержка как у человека
-        try { Thread.sleep(50 + random.nextInt(100)); } catch (Exception e) {}
-        
-        // Обход №25: первый удар может промахнуться
-        boolean miss = (hitCount == 0 && random.nextFloat() < 0.1f);
-        if (!miss) {
-            client.interactionManager.attackEntity(client.player, target);
-        }
-        
-        // Обход №9: анимация удара
-        client.player.networkHandler.sendPacket(new HandSwingC2SPacket(Hand.MAIN_HAND));
-        client.player.swingHand(Hand.MAIN_HAND);
-        
-        // Обход №12: лишний пакет
-        if (random.nextInt(10) == 0) {
-            client.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.OnGroundOnly(true));
-        }
-        
-        // Обход №7: смена цели
         hitCount++;
         if (hitCount > 8) {
             hitCount = 0;
             currentTarget = null;
         }
         
-        // Обход №11: случайный сброс поворота
+        // ===== ОБХОД №3: разные части тела (Spartan, Themis) =====
+        double yOffset = 0.8;
+        int hitZone = random.nextInt(3);
+        if (hitZone == 0) yOffset = 1.5;      // голова
+        else if (hitZone == 1) yOffset = 0.8; // тело
+        else yOffset = 0.2;                   // ноги
+        
+        // ===== ОБХОД №14: смещение хитбокса (Spartan, Negativity) =====
+        double xOff = (random.nextDouble() - 0.5) * 0.3;
+        double zOff = (random.nextDouble() - 0.5) * 0.3;
+        Vec3d hitPos = target.getPos().add(xOff, yOffset, zOff);
+        
+        Vec3d dir = hitPos.subtract(client.player.getEyePos());
+        float yaw = (float)(Math.toDegrees(Math.atan2(dir.z, dir.x)) - 90);
+        float pitch = (float)(-Math.toDegrees(Math.atan2(dir.y, Math.sqrt(dir.x*dir.x + dir.z*dir.z))));
+        
+        // ===== ОБХОД №1: погрешность поворота (Polar, Intave) =====
+        yaw += (random.nextFloat() - 0.5f) * 3;
+        pitch += (random.nextFloat() - 0.5f) * 2;
+        
+        // ===== ОБХОД №8: ограничение угла наклона (Polar, Themis) =====
+        if (pitch > 89) pitch = 89;
+        if (pitch < -89) pitch = -89;
+        
+        // ===== ОБХОД №28: ограничение поворотов в секунду (Vulcan, Matrix) =====
+        long now = System.currentTimeMillis();
+        if (now - lastRotationReset > 1000) {
+            rotationCount = 0;
+            lastRotationReset = now;
+        }
+        if (rotationCount < 6) {
+            client.player.setYaw(yaw);
+            client.player.setPitch(pitch);
+            rotationCount++;
+        }
+        
+        // ===== ОБХОД №4: порядок пакетов (Grim, Vulcan) =====
+        client.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.OnGroundOnly(true));
+        
+        // ===== ОБХОД №5: замедление при атаке (Verus) =====
+        Vec3d vel = client.player.getVelocity();
+        client.player.setVelocity(vel.x * 0.6, vel.y, vel.z * 0.6);
+        
+        // ===== ОБХОД №20: человеческая задержка (Grim, Polar) =====
+        try { Thread.sleep(30 + random.nextInt(70)); } catch (Exception e) {}
+        
+        // ===== ОБХОД №25: первый удар с промахом (Polar, Spartan) =====
+        boolean miss = (hitCount <= 1 && random.nextFloat() < 0.1f);
+        if (!miss) {
+            client.interactionManager.attackEntity(client.player, target);
+        }
+        
+        // ===== ОБХОД №18: принудительная анимация (Grim, Polar) =====
+        client.player.networkHandler.sendPacket(new HandSwingC2SPacket(Hand.MAIN_HAND));
+        client.player.swingHand(Hand.MAIN_HAND);
+        
+        // ===== ОБХОД №11: лишний пустой пакет (Grim) =====
+        if (random.nextInt(10) == 0) {
+            client.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.OnGroundOnly(true));
+        }
+        
+        // ===== ОБХОД №12: случайный сброс поворота (Grim, Vulcan) =====
         if (random.nextInt(40) == 0) {
             client.player.setYaw(client.player.getYaw() + (random.nextFloat() - 0.5f) * 10);
         }
         
-        // Обход №14: подделка позиции
+        // ===== ОБХОД №13: рассинхрон позиции (Polar, Intave) =====
         if (random.nextInt(50) == 0) {
             Vec3d pos = client.player.getPos();
             client.player.setPosition(pos.x + 0.001, pos.y, pos.z + 0.001);
             client.player.setPosition(pos.x, pos.y, pos.z);
+        }
+        
+        // ===== ОБХОД №10: подделка "на земле" (AAC, Spartan) =====
+        if (random.nextInt(30) == 0) {
+            client.player.networkHandler.sendPacket(new PlayerMoveC2SPacket.OnGroundOnly(true));
+        }
+        
+        // ===== ОБХОД №24: задержка при смене цели (Grim, Vulcan) =====
+        if (hitCount == 1 && hitCount > 0) {
+            try { Thread.sleep(100); } catch (Exception e) {}
+        }
+        
+        // ===== ОБХОД №21: обход времени атаки (Grim, Vulcan, Polar) =====
+        long attackTime = System.currentTimeMillis();
+        if (attackTime - lastPacketTime < 100) {
+            try { Thread.sleep(10); } catch (Exception e) {}
+        }
+        lastPacketTime = attackTime;
+        
+        // ===== ОБХОД №26: обход дистанции (Grim, Spartan) =====
+        if (random.nextInt(25) == 0) {
+            Vec3d pos = client.player.getPos();
+            client.player.setPosition(pos.x + 0.005, pos.y, pos.z + 0.005);
+            client.player.setPosition(pos.x, pos.y, pos.z);
+        }
+        
+        // ===== ОБХОД №29: обход ротации (Matrix, Vulcan) =====
+        if (random.nextInt(35) == 0) {
+            client.player.setYaw(client.player.getYaw() + (random.nextFloat() - 0.5f) * 5);
+        }
+        
+        // ===== ОБХОД №30: обход движения (Verus, Intave) =====
+        if (random.nextInt(45) == 0) {
+            client.player.setVelocity(0, client.player.getVelocity().y, 0);
+        }
+        
+        // ===== ОБХОД №15: обход шаблонов атак (Themis, Intave) =====
+        if (hitCount == 3 || hitCount == 6) {
+            try { Thread.sleep(80); } catch (Exception e) {}
+        }
+        
+        // ===== ОБХОД №9: сохранение последнего поворота =====
+        lastYaw = client.player.getYaw();
+        lastPitch = client.player.getPitch();
+        
+        // ===== ОБХОД №17: обход урона за тик (Polar, Karhu) =====
+        if (random.nextInt(20) == 0) {
+            try { Thread.sleep(20); } catch (Exception e) {}
+        }
+        
+        // ===== ОБХОД №19: обход стабильного CPS (Verus, Themis) =====
+        if (random.nextInt(15) == 0) {
+            try { Thread.sleep(50); } catch (Exception e) {}
+        }
+        
+        // ===== ОБХОД №22: обход повторов (Spartan, Negativity) =====
+        if (hitCount == 4 || hitCount == 7) {
+            try { Thread.sleep(60); } catch (Exception e) {}
         }
     }
 }
